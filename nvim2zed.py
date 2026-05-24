@@ -281,6 +281,19 @@ def luminance(color: str) -> float:
     return 0.299 * r + 0.587 * g + 0.114 * b
 
 
+def mix(c1: str | None, c2: str | None, t: float) -> str | None:
+    """Blend c1 -> c2 by fraction t (0 = c1, 1 = c2). Ignores alpha."""
+    a, b = _norm_hex(c1), _norm_hex(c2)
+    if not a or not b:
+        return a or b
+    out = []
+    for i in (1, 3, 5):
+        x = int(a[i:i + 2], 16)
+        y = int(b[i:i + 2], 16)
+        out.append(round(x + (y - x) * t))
+    return "#%02x%02x%02x" % tuple(out)
+
+
 def resolve(hl: dict, name: str) -> dict | None:
     """Return a highlight definition with `reverse` applied (fg/bg swapped)."""
     d = hl.get(name)
@@ -427,15 +440,64 @@ def build_theme(name: str, dump: dict) -> dict | None:
     fg = norm.get("fg") or ("#d4d4d4" if declared == "dark" else "#202020")
     appearance = "dark" if luminance(bg) < 128 else "light"
 
-    muted = (pick(hl, ["Comment", "NonText", "Conceal", "LineNr"], "fg")
-             or with_alpha(fg, "99"))
     accent = pick(hl, ["@function", "Function", "Special", "Identifier", "Title"], "fg") or fg
-    border = (pick(hl, ["WinSeparator", "VertSplit", "LineNr"], "fg")
-              or with_alpha(fg, "33"))
-    float_bg = pick(hl, ["NormalFloat", "Pmenu"], "bg") or bg
+
+    # Elevation: mix the editor bg toward fg. This lightens surfaces on dark
+    # themes and darkens them on light themes, so panels/borders/buttons read as
+    # distinct surfaces even when the colorscheme only themes the buffer.
+    def elev(level: float) -> str:
+        return mix(bg, fg, level)
+
+    # Mute: pull fg toward bg (text that should recede).
+    def dim(level: float) -> str:
+        return mix(fg, bg, level)
+
+    # Prefer a scheme-provided color, but only when it is meaningfully distinct
+    # from the editor bg; otherwise fall back to a derived (tinted) value.
+    def distinct(color: str | None, fallback: str, thresh: float = 4.0) -> str:
+        c = _norm_hex(color)
+        if not c:
+            return fallback
+        return c if abs(luminance(c) - luminance(bg)) >= thresh else fallback
+
+    bg_lum = luminance(bg)
+
+    # Chrome surfaces (panels, status/tab bars). Vim statuslines & tablines are
+    # frequently *inverted* (a light bar with dark text on a dark theme), which
+    # looks wrong as one of Zed's large surfaces. So only adopt a scheme color
+    # when it elevates in the right direction and stays within `cap` luminance of
+    # the editor bg; otherwise use a derived elevation tint.
+    def chrome(color: str | None, level: float, cap: float = 46.0) -> str:
+        derived = elev(level)
+        c = _norm_hex(color)
+        if not c:
+            return derived
+        delta = luminance(c) - bg_lum
+        toward_fg = delta > 0 if appearance == "dark" else delta < 0
+        if toward_fg and 2.0 <= abs(delta) <= cap:
+            return c
+        return derived
+
+    muted = pick(hl, ["Comment", "NonText", "Conceal"], "fg") or dim(0.38)
+    placeholder = pick(hl, ["NonText", "Whitespace"], "fg") or dim(0.52)
+    disabled = dim(0.6)
+
+    surface = chrome(pick(hl, ["NormalFloat", "Pmenu"], "bg"), 0.05)
+    elevated = mix(surface, fg, 0.05)
+    panel = chrome(pick(hl, ["Pmenu", "NormalFloat"], "bg"), 0.04)
+    status_bg = chrome(pick(hl, ["StatusLine"], "bg"), 0.05)
+    statusnc_bg = chrome(pick(hl, ["StatusLineNC"], "bg"), 0.03)
+    tabbar_bg = chrome(pick(hl, ["TabLineFill"], "bg"), 0.03)
+    tab_inactive = chrome(pick(hl, ["TabLine", "TabLineFill"], "bg"), 0.05)
+    tab_active = bg  # active tab matches the buffer/editor background
+    # Borders: WinSeparator/VertSplit are semantic separators, but reject the
+    # rare extreme value (some schemes point them at a mid-gray fg).
+    border = chrome(pick(hl, ["WinSeparator", "VertSplit"], "fg"), 0.22, cap=70.0)
+    border_variant = elev(0.13)
     visual_bg = pick(hl, ["Visual"], "bg")
-    cursorline_bg = pick(hl, ["CursorLine", "CursorColumn"], "bg")
-    pmenu_sel = pick(hl, ["PmenuSel", "PmenuThumb", "Visual"], "bg")
+    cursorline_bg = distinct(pick(hl, ["CursorLine", "CursorColumn"], "bg"), elev(0.05))
+    sel = distinct(pick(hl, ["PmenuSel", "Visual"], "bg"), elev(0.18))
+    hover = distinct(cursorline_bg, elev(0.10))
 
     style: dict = {}
 
@@ -447,42 +509,43 @@ def build_theme(name: str, dump: dict) -> dict | None:
     put("background", bg)
     style["background.appearance"] = "opaque"
     put("foreground", fg)
-    put("surface.background", float_bg)
-    put("elevated_surface.background", float_bg)
-    put("panel.background", float_bg)
+    put("surface.background", surface)
+    put("elevated_surface.background", elevated)
+    put("panel.background", panel)
     put("editor.background", bg)
     put("editor.foreground", fg)
-    put("editor.gutter.background", pick(hl, ["SignColumn"], "bg") or bg)
-    put("editor.subheader.background", float_bg)
+    put("editor.gutter.background", bg)
+    put("editor.subheader.background", surface)
     put("text", fg)
     put("text.muted", muted)
-    put("text.disabled", pick(hl, ["Conceal", "NonText", "Whitespace"], "fg") or muted)
-    put("text.placeholder", muted)
+    put("text.disabled", disabled)
+    put("text.placeholder", placeholder)
     put("text.accent", accent)
 
     # Borders
-    for k in ("border", "border.variant", "border.disabled", "pane.focused_border",
-              "pane_group.border", "panel.focused_border", "scrollbar.thumb.border",
-              "scrollbar.track.border"):
-        put(k, border)
-    put("border.focused", pick(hl, ["MatchParen", "Search"], "bg") or accent)
+    put("border", border)
+    put("border.variant", border_variant)
+    put("border.disabled", border_variant)
+    put("border.focused", accent)
     put("border.selected", accent)
     put("border.transparent", "#00000000")
+    for k in ("pane.focused_border", "pane_group.border", "panel.focused_border"):
+        put(k, border)
+    put("scrollbar.thumb.border", border_variant)
+    put("scrollbar.track.border", "#00000000")
 
     # Editor decorations
-    put("editor.line_number", pick(hl, ["LineNr"], "fg") or muted)
+    put("editor.line_number", pick(hl, ["LineNr"], "fg") or dim(0.5))
     put("editor.active_line_number", pick(hl, ["CursorLineNr"], "fg") or fg)
-    put("editor.active_line.background",
-        cursorline_bg or with_alpha(fg, "0d"))
-    put("editor.highlighted_line.background",
-        with_alpha(cursorline_bg or accent, "26"))
-    put("editor.invisible", pick(hl, ["NonText", "Whitespace"], "fg") or muted)
+    put("editor.active_line.background", cursorline_bg)
+    put("editor.highlighted_line.background", with_alpha(cursorline_bg, "80"))
+    put("editor.invisible", pick(hl, ["NonText", "Whitespace"], "fg") or dim(0.65))
     put("editor.indent_guide",
-        pick(hl, ["IndentBlanklineChar", "IblIndent", "Whitespace"], "fg") or border)
+        pick(hl, ["IndentBlanklineChar", "IblIndent"], "fg") or elev(0.12))
     put("editor.indent_guide_active",
-        pick(hl, ["IndentBlanklineContextChar", "IblScope"], "fg") or muted)
-    put("editor.wrap_guide", pick(hl, ["ColorColumn"], "bg") or border)
-    put("editor.active_wrap_guide", border)
+        pick(hl, ["IndentBlanklineContextChar", "IblScope"], "fg") or elev(0.25))
+    put("editor.wrap_guide", pick(hl, ["ColorColumn"], "bg") or elev(0.10))
+    put("editor.active_wrap_guide", elev(0.20))
     put("editor.document_highlight.read_background",
         with_alpha(visual_bg or accent, "44"))
     put("editor.document_highlight.write_background",
@@ -493,36 +556,36 @@ def build_theme(name: str, dump: dict) -> dict | None:
         with_alpha(pick(hl, ["Search", "IncSearch", "CurSearch"], "bg") or accent, "66"))
 
     # Tabs, bars, panels
-    put("tab_bar.background", pick(hl, ["TabLineFill", "StatusLine"], "bg") or float_bg)
-    put("tab.inactive_background", pick(hl, ["TabLine", "TabLineFill"], "bg") or float_bg)
-    put("tab.active_background", pick(hl, ["TabLineSel"], "bg") or bg)
-    put("status_bar.background", pick(hl, ["StatusLine"], "bg") or float_bg)
-    put("title_bar.background", pick(hl, ["StatusLine"], "bg") or float_bg)
-    put("title_bar.inactive_background", pick(hl, ["StatusLineNC"], "bg") or float_bg)
+    put("tab_bar.background", tabbar_bg)
+    put("tab.inactive_background", tab_inactive)
+    put("tab.active_background", tab_active)
+    put("status_bar.background", status_bg)
+    put("title_bar.background", status_bg)
+    put("title_bar.inactive_background", statusnc_bg)
     put("toolbar.background", bg)
 
     # Elements (buttons, list rows, inputs)
-    put("element.background", float_bg)
-    put("element.hover", with_alpha(cursorline_bg or visual_bg or accent, "33"))
-    put("element.active", pmenu_sel or with_alpha(accent, "44"))
-    put("element.selected", pmenu_sel or with_alpha(accent, "55"))
-    put("element.disabled", float_bg)
+    put("element.background", elev(0.06))
+    put("element.hover", hover)
+    put("element.active", elev(0.14))
+    put("element.selected", sel)
+    put("element.disabled", surface)
     put("ghost_element.background", "#00000000")
-    put("ghost_element.hover", with_alpha(cursorline_bg or accent, "22"))
-    put("ghost_element.active", with_alpha(accent, "33"))
-    put("ghost_element.selected", pmenu_sel or with_alpha(accent, "44"))
+    put("ghost_element.hover", with_alpha(elev(0.12), "80"))
+    put("ghost_element.active", with_alpha(elev(0.18), "aa"))
+    put("ghost_element.selected", with_alpha(sel, "aa"))
     put("drop_target.background", with_alpha(visual_bg or accent, "33"))
 
     # Scrollbar
-    put("scrollbar.thumb.background", with_alpha(muted, "44"))
-    put("scrollbar.thumb.hover_background", with_alpha(muted, "66"))
+    put("scrollbar.thumb.background", with_alpha(elev(0.30), "cc"))
+    put("scrollbar.thumb.hover_background", elev(0.38))
     put("scrollbar.track.background", "#00000000")
 
     # Icons
     put("icon", fg)
     put("icon.muted", muted)
-    put("icon.disabled", with_alpha(muted, "99"))
-    put("icon.placeholder", muted)
+    put("icon.disabled", disabled)
+    put("icon.placeholder", placeholder)
     put("icon.accent", accent)
     put("link_text.hover", accent)
 

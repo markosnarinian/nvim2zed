@@ -97,10 +97,18 @@ to fine-tune colors visually.
    (`Function`, `String`, …) because Zed's own syntax token names are modelled on
    the same Treesitter captures — falling back to the legacy groups when a
    capture isn't themed.
-3. **Light/dark.** Each scheme is dumped against both backgrounds; appearance is
+3. **Derive the UI chrome.** Most Vim colorschemes only theme the buffer, so
+   Zed's surrounding UI (panels, borders, buttons, tabs, status bar, scrollbar,
+   placeholders) is **derived by tinting the editor background toward the
+   foreground** — lightening surfaces on dark themes and darkening them on light
+   themes, in layered steps. Scheme-provided colors (`NormalFloat`, `Pmenu`,
+   `StatusLine`, `WinSeparator`, …) are used when present, but only when they
+   elevate in the right direction and aren't wildly out of range — Vim
+   statuslines are often inverted, which looks wrong as a large Zed surface.
+4. **Light/dark.** Each scheme is dumped against both backgrounds; appearance is
    decided from the `Normal` background luminance. Schemes that don't react to
    `&background` collapse to a single theme automatically.
-4. **Terminal colors.** `g:terminal_color_0..15` (or Vim's
+5. **Terminal colors.** `g:terminal_color_0..15` (or Vim's
    `g:terminal_ansi_colors`) are used when the scheme sets them, otherwise a
    reasonable ANSI palette is derived from common highlight groups.
 
