@@ -15,11 +15,7 @@ source files.
 
 ## ⚠️ AI disclaimer
 
-This project was written almost entirely by an AI assistant (Claude). The code
-has been smoke-tested against Neovim's built-in colorschemes, but it has not
-been exhaustively reviewed line by line by a human. Treat the generated themes
-as a **starting point**: review them, tweak colors to taste, and open an issue
-or PR if you hit a scheme it handles poorly. Use at your own risk.
+This project was largely written with AI.
 
 ## Requirements
 
