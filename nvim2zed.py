@@ -18,6 +18,7 @@ file that can be dropped into a Zed extension's `themes/` directory or
 from __future__ import annotations
 
 import argparse
+import colorsys
 import json
 import os
 import re
@@ -294,6 +295,32 @@ def mix(c1: str | None, c2: str | None, t: float) -> str | None:
     return "#%02x%02x%02x" % tuple(out)
 
 
+def _rgb(c: str) -> tuple[int, int, int]:
+    return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+
+
+def saturation(c: str | None) -> float:
+    """HSV saturation, 0..1. Gray ~0, vivid ~1."""
+    c = _norm_hex(c)
+    if not c:
+        return 0.0
+    r, g, b = (x / 255 for x in _rgb(c))
+    mx = max(r, g, b)
+    return 0.0 if mx == 0 else (mx - min(r, g, b)) / mx
+
+
+def shift_hue(c: str | None, degrees: float) -> str | None:
+    """Rotate the hue of a color, keeping lightness/saturation."""
+    c = _norm_hex(c)
+    if not c:
+        return c
+    r, g, b = (x / 255 for x in _rgb(c))
+    h, light, s = colorsys.rgb_to_hls(r, g, b)
+    h = (h + degrees / 360.0) % 1.0
+    r, g, b = colorsys.hls_to_rgb(h, light, s)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
 def resolve(hl: dict, name: str) -> dict | None:
     """Return a highlight definition with `reverse` applied (fg/bg swapped)."""
     d = hl.get(name)
@@ -397,14 +424,20 @@ def build_terminal(hl: dict, term: dict, fg: str, bg: str) -> dict:
 
     # Derive a fallback palette from common highlight groups when the scheme
     # does not publish g:terminal_color_* / g:terminal_ansi_colors.
+    dark = luminance(bg) < 128
     derived = {
         0: bg,
-        1: pick(hl, ["@keyword.exception", "DiagnosticError", "ErrorMsg", "Error"], "fg"),
-        2: pick(hl, ["@string", "String", "DiffAdd", "diffAdded"], "fg"),
-        3: pick(hl, ["@type", "Type", "WarningMsg", "@constant"], "fg"),
-        4: pick(hl, ["@function", "Function", "Directory"], "fg"),
-        5: pick(hl, ["@keyword", "Keyword", "Statement", "@constant.builtin"], "fg"),
-        6: pick(hl, ["@string.special", "Special", "@operator", "SpecialChar"], "fg"),
+        1: pick(hl, ["@keyword.exception", "DiagnosticError", "ErrorMsg", "Error",
+                     "@diff.minus"], "fg"),
+        2: pick(hl, ["@string", "String", "@function.builtin", "DiffAdd",
+                     "diffAdded", "@diff.plus"], "fg"),
+        3: pick(hl, ["WarningMsg", "@type", "Type", "@number", "Number",
+                     "@constant", "@property"], "fg"),
+        4: pick(hl, ["@function", "Function", "@function.call", "Directory"], "fg"),
+        5: pick(hl, ["@keyword", "Keyword", "Statement", "@constant.builtin",
+                     "@variable.builtin", "Identifier"], "fg"),
+        6: pick(hl, ["@string.special", "Special", "@constructor", "@operator",
+                     "SpecialChar"], "fg"),
         7: fg,
     }
     out: dict = {}
@@ -413,7 +446,10 @@ def build_terminal(hl: dict, term: dict, fg: str, bg: str) -> dict:
         if c:
             out[f"terminal.ansi.{_ANSI[i]}"] = c
     for i in range(8, 16):
-        c = t(i) or out.get(f"terminal.ansi.{_ANSI[i - 8]}")
+        base = out.get(f"terminal.ansi.{_ANSI[i - 8]}")
+        # When the scheme has no explicit bright color, synthesise one by
+        # nudging the normal color brighter (dark themes) or deeper (light).
+        c = t(i) or (mix(base, "#ffffff", 0.22) if dark else mix(base, "#000000", 0.18))
         if c:
             out[f"terminal.ansi.bright_{_ANSI[i - 8]}"] = c
     return out
@@ -440,13 +476,31 @@ def build_theme(name: str, dump: dict) -> dict | None:
     fg = norm.get("fg") or ("#d4d4d4" if declared == "dark" else "#202020")
     appearance = "dark" if luminance(bg) < 128 else "light"
 
-    accent = pick(hl, ["@function", "Function", "Special", "Identifier", "Title"], "fg") or fg
+    bg_lum = luminance(bg)
+    # Contrast factor: low-contrast schemes (fg close to bg) need bigger
+    # elevation steps for UI surfaces to stay visible. ~1.0 at a normal gap.
+    k = min(2.5, max(1.0, 120.0 / max(abs(luminance(fg) - bg_lum), 1.0)))
+
+    # Accent: most-saturated candidate among the usual "interesting" groups,
+    # skipping anything too close to the background. A vivid keyword/type often
+    # makes a more beautiful accent than a muted function color.
+    _acc = [c for g in ["@function", "Function", "@keyword", "Keyword", "@type",
+                        "Type", "Special", "@constant", "Constant", "@string",
+                        "String", "Identifier", "Title"]
+            if (c := pick(hl, [g], "fg")) and abs(luminance(c) - bg_lum) >= 10]
+    accent = max(_acc, key=saturation) if _acc else (
+        pick(hl, ["@function", "Function", "Special"], "fg") or fg)
 
     # Elevation: mix the editor bg toward fg. This lightens surfaces on dark
     # themes and darkens them on light themes, so panels/borders/buttons read as
     # distinct surfaces even when the colorscheme only themes the buffer.
     def elev(level: float) -> str:
         return mix(bg, fg, level)
+
+    # Elevation scaled by the contrast factor — used for interactive elements so
+    # hover/active/selected stay perceptible on low-contrast schemes.
+    def el(level: float) -> str:
+        return mix(bg, fg, min(level * k, 0.6))
 
     # Mute: pull fg toward bg (text that should recede).
     def dim(level: float) -> str:
@@ -459,8 +513,6 @@ def build_theme(name: str, dump: dict) -> dict | None:
         if not c:
             return fallback
         return c if abs(luminance(c) - luminance(bg)) >= thresh else fallback
-
-    bg_lum = luminance(bg)
 
     # Chrome surfaces (panels, status/tab bars). Vim statuslines & tablines are
     # frequently *inverted* (a light bar with dark text on a dark theme), which
@@ -490,14 +542,15 @@ def build_theme(name: str, dump: dict) -> dict | None:
     tabbar_bg = chrome(pick(hl, ["TabLineFill"], "bg"), 0.03)
     tab_inactive = chrome(pick(hl, ["TabLine", "TabLineFill"], "bg"), 0.05)
     tab_active = bg  # active tab matches the buffer/editor background
-    # Borders: WinSeparator/VertSplit are semantic separators, but reject the
-    # rare extreme value (some schemes point them at a mid-gray fg).
-    border = chrome(pick(hl, ["WinSeparator", "VertSplit"], "fg"), 0.22, cap=70.0)
-    border_variant = elev(0.13)
+    # Borders: always derived elevation. Scheme WinSeparator/VertSplit colors
+    # are too often a loud mid-gray fg, so we ignore them for a consistent,
+    # subtle border that scales with contrast.
+    border = elev(min(0.20 * k, 0.45))
+    border_variant = elev(min(0.13 * k, 0.30))
     visual_bg = pick(hl, ["Visual"], "bg")
-    cursorline_bg = distinct(pick(hl, ["CursorLine", "CursorColumn"], "bg"), elev(0.05))
-    sel = distinct(pick(hl, ["PmenuSel", "Visual"], "bg"), elev(0.18))
-    hover = distinct(cursorline_bg, elev(0.10))
+    cursorline_bg = distinct(pick(hl, ["CursorLine", "CursorColumn"], "bg"), el(0.07))
+    sel = distinct(pick(hl, ["PmenuSel", "Visual"], "bg"), el(0.18))
+    hover = distinct(cursorline_bg, el(0.10))
 
     style: dict = {}
 
@@ -529,8 +582,8 @@ def build_theme(name: str, dump: dict) -> dict | None:
     put("border.focused", accent)
     put("border.selected", accent)
     put("border.transparent", "#00000000")
-    for k in ("pane.focused_border", "pane_group.border", "panel.focused_border"):
-        put(k, border)
+    for _bk in ("pane.focused_border", "pane_group.border", "panel.focused_border"):
+        put(_bk, border)
     put("scrollbar.thumb.border", border_variant)
     put("scrollbar.track.border", "#00000000")
 
@@ -564,21 +617,21 @@ def build_theme(name: str, dump: dict) -> dict | None:
     put("title_bar.inactive_background", statusnc_bg)
     put("toolbar.background", bg)
 
-    # Elements (buttons, list rows, inputs)
-    put("element.background", elev(0.06))
+    # Elements (buttons, list rows, inputs) — steps scaled by contrast.
+    put("element.background", el(0.06))
     put("element.hover", hover)
-    put("element.active", elev(0.14))
+    put("element.active", el(0.14))
     put("element.selected", sel)
     put("element.disabled", surface)
     put("ghost_element.background", "#00000000")
-    put("ghost_element.hover", with_alpha(elev(0.12), "80"))
-    put("ghost_element.active", with_alpha(elev(0.18), "aa"))
+    put("ghost_element.hover", with_alpha(el(0.12), "80"))
+    put("ghost_element.active", with_alpha(el(0.18), "aa"))
     put("ghost_element.selected", with_alpha(sel, "aa"))
     put("drop_target.background", with_alpha(visual_bg or accent, "33"))
 
     # Scrollbar
-    put("scrollbar.thumb.background", with_alpha(elev(0.30), "cc"))
-    put("scrollbar.thumb.hover_background", elev(0.38))
+    put("scrollbar.thumb.background", with_alpha(el(0.30), "cc"))
+    put("scrollbar.thumb.hover_background", el(0.38))
     put("scrollbar.track.background", "#00000000")
 
     # Icons
@@ -601,22 +654,25 @@ def build_theme(name: str, dump: dict) -> dict | None:
     removed = pick(hl, ["GitSignsDelete", "DiffDelete", "diffRemoved", "Removed"], "fg") \
         or pick(hl, ["DiffDelete"], "bg")
 
-    def status(base_key: str, color: str | None, bg_src: str | None = None) -> None:
+    def status(base_key: str, color: str | None, want_bg: bool = False) -> None:
         if not color:
             return
         style[base_key] = color
         style[f"{base_key}.border"] = color
-        if bg_src:
-            style[f"{base_key}.background"] = with_alpha(bg_src, "22")
+        if want_bg:
+            # Solid blend of the editor bg toward the status hue: a subtle but
+            # always-visible tint, independent of the hue (unlike a fixed alpha
+            # over the editor, which can vanish or turn muddy).
+            style[f"{base_key}.background"] = mix(bg, color, 0.13)
 
-    status("error", error, pick(hl, ["DiffDelete", "DiagnosticError"], "bg"))
-    status("warning", warn, pick(hl, ["DiagnosticWarn"], "bg"))
-    status("info", info, pick(hl, ["DiagnosticInfo"], "bg"))
-    status("hint", hint, pick(hl, ["DiagnosticHint"], "bg"))
+    status("error", error, want_bg=True)
+    status("warning", warn, want_bg=True)
+    status("info", info, want_bg=True)
+    status("hint", hint, want_bg=True)
     status("success", added)
-    status("created", added, pick(hl, ["DiffAdd", "GitSignsAdd"], "bg"))
-    status("modified", changed, pick(hl, ["DiffChange", "GitSignsChange"], "bg"))
-    status("deleted", removed, pick(hl, ["DiffDelete", "GitSignsDelete"], "bg"))
+    status("created", added, want_bg=True)
+    status("modified", changed, want_bg=True)
+    status("deleted", removed, want_bg=True)
     status("conflict", warn)
     status("renamed", info)
     status("ignored", muted)
@@ -632,30 +688,37 @@ def build_theme(name: str, dump: dict) -> dict | None:
     put("terminal.ansi.background", bg)
     style.update(build_terminal(hl, term, fg, bg))
 
-    # Accents & players
+    # Accents: distinct, reasonably vivid palette colors from the scheme.
     palette: list[str] = []
     for n in ["@function", "Function", "@keyword", "Keyword", "Statement",
               "@string", "String", "@type", "Type", "@constant", "Constant",
               "Special", "Title", "@property"]:
         c = pick(hl, [n], "fg")
-        if c and c != bg and c not in palette:
+        if c and abs(luminance(c) - bg_lum) >= 8 and c not in palette:
             palette.append(c)
     if not palette:
-        palette = [accent, fg]
+        palette = [accent]
     style["accents"] = palette[:8]
 
+    # Players: Zed shows one color per collaborator, so each of the 8 needs a
+    # distinct hue. Use the scheme palette, then fill any shortfall by rotating
+    # the accent hue. Selection is the player's own color at low alpha.
     cursor = (pick(hl, ["Cursor", "lCursor", "TermCursor"], "bg")
               or pick(hl, ["Cursor"], "fg") or accent)
-    sel = visual_bg and with_alpha(visual_bg, "66")
-    players = []
-    for i in range(8):
-        c = palette[i % len(palette)]
-        players.append({
-            "cursor": c if i else cursor,
-            "background": c if i else cursor,
-            "selection": sel or with_alpha(c, "3d"),
-        })
-    style["players"] = players
+    candidates = [cursor, *palette] + [shift_hue(accent, 47 * j) for j in range(1, 12)]
+    player_colors: list[str] = []
+    seen: set[str] = set()
+    for c in candidates:
+        h = _norm_hex(c)
+        if h and h not in seen:
+            seen.add(h)
+            player_colors.append(h)
+        if len(player_colors) >= 8:
+            break
+    style["players"] = [
+        {"cursor": c, "background": c, "selection": with_alpha(c, "3d")}
+        for c in player_colors
+    ]
 
     # Syntax
     style["syntax"] = build_syntax(hl)
