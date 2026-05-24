@@ -82,6 +82,10 @@ The output is a theme **family** file (`$schema`, `name`, `author`, `themes[]`).
 You can also paste it into the [Zed Theme Builder](https://zed.dev/theme-builder)
 to fine-tune colors visually.
 
+### Attribution
+
+If you distribute or publish a theme generated partially or completely with `nvim2zed`, mention that it was created using nvim2zed and include a link to this repository: https://github.com/markosnarinian/nvim2zed
+
 ## How it works
 
 1. **Dump.** A headless `nvim`/`vim` is launched, `termguicolors` is enabled, the
