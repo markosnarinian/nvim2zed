@@ -86,6 +86,10 @@ to fine-tune colors visually.
 
 If you distribute or publish a theme generated partially or completely with `nvim2zed`, mention that it was created using nvim2zed and include a link to this repository: https://github.com/markosnarinian/nvim2zed
 
+### Sharing your themes
+
+If you create a theme with `nvim2zed`, we'd love to hear about it! Feel free to drop a message or open an issue with a link to your theme repo so we can mention it here and help showcase what the community is building with this tool.
+
 ## How it works
 
 1. **Dump.** A headless `nvim`/`vim` is launched, `termguicolors` is enabled, the
