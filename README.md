@@ -26,32 +26,32 @@ This project was largely written with AI.
 
 ```bash
 # Convert a single scheme (produces both light and dark variants if supported)
-python3 nvim2zed.py habamax
+./nvim2zed.py habamax
 
 # Convert several into one theme family
-python3 nvim2zed.py tokyonight gruvbox catppuccin -o my-themes.json
+./nvim2zed.py tokyonight gruvbox catppuccin -o my-themes.json
 
 # Convert every colorscheme the editor can see
-python3 nvim2zed.py --all -o all-themes.json
+./nvim2zed.py --all -o all-themes.json
 
 # Only the dark variant, written to stdout
-python3 nvim2zed.py habamax --background dark -o -
+./nvim2zed.py habamax --background dark -o -
 ```
 
 ### Options
 
-| Flag | Description |
-| --- | --- |
-| `schemes...` | One or more colorscheme names to convert. |
-| `--all` | Convert every colorscheme available to the editor. |
-| `-o, --output FILE` | Output path (`-` for stdout). Defaults to `<family>.json`. |
-| `--name NAME` | Theme family name. |
-| `--author NAME` | Theme family author (default `nvim2zed`). |
-| `--background {dark,light,both}` | Background variant(s) to dump (default `both`). |
-| `--editor {auto,nvim,vim}` | Which editor to drive (default auto-detect). |
-| `--config PATH` | Editor config to load (passed as `-u`). |
-| `--clean` | Ignore your user config (`-u NONE`); built-in schemes only. |
-| `--verbose` | Print the editor's stderr (useful for debugging a failing scheme). |
+| Flag                             | Description                                                        |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `schemes...`                     | One or more colorscheme names to convert.                          |
+| `--all`                          | Convert every colorscheme available to the editor.                 |
+| `-o, --output FILE`              | Output path (`-` for stdout). Defaults to `<family>.json`.         |
+| `--name NAME`                    | Theme family name.                                                 |
+| `--author NAME`                  | Theme family author (default `nvim2zed`).                          |
+| `--background {dark,light,both}` | Background variant(s) to dump (default `both`).                    |
+| `--editor {auto,nvim,vim}`       | Which editor to drive (default auto-detect).                       |
+| `--config PATH`                  | Editor config to load (passed as `-u`).                            |
+| `--clean`                        | Ignore your user config (`-u NONE`); built-in schemes only.        |
+| `--verbose`                      | Print the editor's stderr (useful for debugging a failing scheme). |
 
 ### Making installed (plugin) colorschemes visible
 
